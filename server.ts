@@ -6,8 +6,12 @@ import { fileURLToPath } from 'url';
 import puppeteer from 'puppeteer';
 import { reconcileData, getDynamicLabel } from './src/services/reconciliation.js';
 import { generateExcelReport } from './src/services/exportService.js';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-const __filename = fileURLToPath(import.meta.url);
+const __filename = (typeof import.meta !== 'undefined' && import.meta.url) 
+  ? fileURLToPath(import.meta.url) 
+  : __filename;
 const __dirname = path.dirname(__filename);
 
 const app = express();
