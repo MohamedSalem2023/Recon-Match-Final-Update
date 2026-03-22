@@ -4,18 +4,26 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import puppeteer from 'puppeteer';
-import { reconcileData, getDynamicLabel } from './src/services/reconciliation.js';
+import { reconcileData } from './src/services/reconciliation.js';
 import { generateExcelReport } from './src/services/exportService.js';
-import path from 'path';
-import { fileURLToPath } from 'url';
 
-const __filename = (typeof import.meta !== 'undefined' && import.meta.url) 
-  ? fileURLToPath(import.meta.url) 
-  : __filename;
-const __dirname = path.dirname(__filename);
+// --- معالجة مشكلة المسارات بشكل آمن ---
+let _filename;
+let _dirname;
+
+try {
+  // محاولة استخدام الطريقة الخاصة بـ ES Modules
+  _filename = fileURLToPath(import.meta.url);
+  _dirname = path.dirname(_filename);
+} catch (e) {
+  // إذا فشلت (بسبب التحويل لـ CommonJS في Render)، نستخدم القيم الافتراضية
+  _filename = __filename;
+  _dirname = __dirname;
+}
+// ---------------------------------------
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000; // استخدام البورت الموفر من Render أو 3000
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
@@ -69,24 +77,17 @@ app.post('/api/generate-pdf', async (req, res) => {
     }
 
     const browser = await puppeteer.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      headless: "new",
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
     });
 
     const page = await browser.newPage();
-    
-    // Set content and wait for network idle to ensure Tailwind CSS is loaded
     await page.setContent(html, { waitUntil: 'networkidle0' });
 
     const pdfBuffer = await page.pdf({
       format: 'A4',
       printBackground: true,
-      margin: {
-        top: '20mm',
-        right: '20mm',
-        bottom: '20mm',
-        left: '20mm',
-      },
+      margin: { top: '20mm', right: '20mm', bottom: '20mm', left: '20mm' },
       displayHeaderFooter: true,
       headerTemplate: '<div></div>',
       footerTemplate: `
@@ -108,7 +109,7 @@ app.post('/api/generate-pdf', async (req, res) => {
   }
 });
 
-// Vite middleware for development
+// Vite middleware for development vs static for production
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -117,6 +118,7 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
+    // في وضع الإنتاج نستخدم المسار الصحيح لمجلد dist
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
@@ -125,7 +127,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Server running on port ${PORT}`);
   });
 }
 
