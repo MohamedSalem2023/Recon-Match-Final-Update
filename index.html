@@ -3,11 +3,50 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>My Google AI Studio App</title>
+    <title>ReconMatch</title>
+    
+    <!-- كود التحقق من التوكين -->
+    <script>
+      const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwoOBThKPiR_zqzfok3EMzQ1XXmS7aw_8r-TDGeV1cx8KutL0HOl9q_QZy6ZyB0hYdFxA/exec";
+      const LANDING_PAGE_URL = "https://ais-dev-fmlgim3vooq3jujda5ihhz-152129847727.europe-west2.run.app";
+
+      async function checkAccess() {
+        const urlParams = new URLSearchParams(window.location.search);
+        const tokenFromUrl = urlParams.get('token');
+        const savedToken = localStorage.getItem('reconmatch_token');
+        const activeToken = tokenFromUrl || savedToken;
+
+        if (!activeToken) {
+          window.location.href = LANDING_PAGE_URL;
+          return;
+        }
+
+        try {
+          const response = await fetch(`${GOOGLE_SCRIPT_URL}?token=${activeToken}`);
+          const data = await response.json();
+
+          if (data.valid) {
+            if (tokenFromUrl) {
+              localStorage.setItem('reconmatch_token', tokenFromUrl);
+              localStorage.setItem('reconmatch_plan', data.plan);
+              window.history.replaceState({}, document.title, window.location.pathname);
+            }
+          } else {
+            localStorage.removeItem('reconmatch_token');
+            localStorage.removeItem('reconmatch_plan');
+            window.location.href = LANDING_PAGE_URL;
+          }
+        } catch (error) {
+          console.error("Error verifying token:", error);
+          window.location.href = LANDING_PAGE_URL;
+        }
+      }
+
+      checkAccess();
+    </script>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-
