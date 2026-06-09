@@ -36,6 +36,9 @@ export function MappingPage({ datasets, onBack, onNext }: MappingPageProps) {
     dateToleranceDays: 0,
     fuzzyThreshold: 0.3,
     matchOneToMany: true,
+    enableDailyAggregation: false,
+    aggregationKeywords: 'POS, نقاط بيع, نقطة بيع, عمولة, عمولات, مصاريف بنكية, رسوم, commission, fees',
+    aggregationSide: 'A',
   });
 
   // Auto-detect columns based on common names
@@ -215,6 +218,68 @@ export function MappingPage({ datasets, onBack, onNext }: MappingPageProps) {
               <span className="text-sm font-medium text-slate-700">Enable One-to-Many Matching</span>
             </label>
           </div>
+        </div>
+
+        {/* Daily Aggregation Section */}
+        <div className="mt-8 pt-6 border-t border-slate-200">
+          <div className="flex items-start justify-between mb-4">
+            <div>
+              <h4 className="text-lg font-semibold text-slate-800">Daily Aggregation (POS / Bank Commissions)</h4>
+              <p className="text-sm text-slate-500 mt-1">
+                When one side records POS or bank commission transactions as one daily total but the
+                other side lists each transaction individually, enable this to sum the detail side
+                per day and match it against the single aggregated entry.
+              </p>
+            </div>
+            <label className="flex items-center space-x-3 cursor-pointer shrink-0 ml-4">
+              <input
+                data-testid="enable-daily-aggregation-checkbox"
+                type="checkbox"
+                checked={settings.enableDailyAggregation}
+                onChange={(e) => setSettings(prev => ({ ...prev, enableDailyAggregation: e.target.checked }))}
+                className="w-5 h-5 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
+              />
+              <span className="text-sm font-medium text-slate-700">Enable</span>
+            </label>
+          </div>
+
+          {settings.enableDailyAggregation && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  Aggregated side (records the single daily total)
+                </label>
+                <select
+                  data-testid="aggregation-side-select"
+                  value={settings.aggregationSide}
+                  onChange={(e) => setSettings(prev => ({ ...prev, aggregationSide: e.target.value as 'A' | 'B' }))}
+                  className="w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="A">Dataset A (e.g., Ledger)</option>
+                  <option value="B">Dataset B (e.g., Bank Statement)</option>
+                </select>
+                <p className="text-xs text-slate-500 mt-1">
+                  The other side is assumed to list every transaction separately.
+                </p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  Aggregation keywords (comma-separated)
+                </label>
+                <textarea
+                  data-testid="aggregation-keywords-input"
+                  rows={2}
+                  value={settings.aggregationKeywords}
+                  onChange={(e) => setSettings(prev => ({ ...prev, aggregationKeywords: e.target.value }))}
+                  className="w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 text-sm"
+                  placeholder="POS, نقاط بيع, عمولة, commission, fees"
+                />
+                <p className="text-xs text-slate-500 mt-1">
+                  Records matching any keyword (in description or reference) on both sides will be grouped daily.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

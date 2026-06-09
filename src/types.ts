@@ -20,11 +20,16 @@ export interface ReconcileSettings {
   dateToleranceDays: number;
   fuzzyThreshold: number;
   matchOneToMany: boolean;
+  // Daily aggregation: one side records POS/commission entries as a single
+  // daily total while the other side lists them individually.
+  enableDailyAggregation: boolean;
+  aggregationKeywords: string; // comma-separated, e.g. "POS, نقاط بيع, عمولة"
+  aggregationSide: 'A' | 'B'; // which dataset contains the aggregated (single) entries
 }
 
 export interface MatchResult {
   id: string;
-  type: 'exact' | 'combined' | 'fuzzy' | 'manual';
+  type: 'exact' | 'combined' | 'fuzzy' | 'manual' | 'daily-aggregate';
   recordsA: any[];
   recordsB: any[];
   debitMatchA: number;

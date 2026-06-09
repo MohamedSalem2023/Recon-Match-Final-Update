@@ -116,6 +116,114 @@ export function reconcileData(
     currentB = currentB.filter(b => !matchedBIds.includes(b._id));
   };
 
+  // ---- Daily Aggregation Step (POS / Bank Commissions) ----
+  // One side (aggregatedSide) records POS/commission as a single daily total,
+  // the other side (detailSide) lists each transaction individually. We sum
+  // detail-side records sharing the same date AND a matching keyword, and try
+  // to match the daily sum against the single aggregated entry.
+  const runDailyAggregationMatch = () => {
+    if (!settings.enableDailyAggregation) return;
+
+    const rawKeywords = (settings.aggregationKeywords || '')
+      .split(/[,\n;]/)
+      .map(k => k.trim().toLowerCase())
+      .filter(k => k.length > 0);
+
+    if (rawKeywords.length === 0) return;
+
+    const aggregatedSide = settings.aggregationSide || 'A';
+    const aggregatedPool = aggregatedSide === 'A' ? currentA : currentB;
+    const detailPool = aggregatedSide === 'A' ? currentB : currentA;
+
+    const matchesKeyword = (item: any) => {
+      const hay = `${item.desc || ''} ${item.ref || ''}`.toLowerCase();
+      return rawKeywords.some(k => hay.includes(k));
+    };
+
+    const sameDay = (d1: Date | null, d2: Date | null) => {
+      if (!d1 || !d2) return false;
+      return Math.abs(differenceInDays(d1, d2)) <= settings.dateToleranceDays;
+    };
+
+    for (const side of ['debit', 'credit'] as const) {
+      const aggCandidates = aggregatedPool.filter(item => matchesKeyword(item) && item[side] > 0 && item.date);
+
+      for (const agg of aggCandidates) {
+        // re-check it's still in the pool (may have been removed by previous side)
+        const stillThere = aggregatedSide === 'A'
+          ? currentA.some(x => x._id === agg._id)
+          : currentB.some(x => x._id === agg._id);
+        if (!stillThere) continue;
+
+        const detailCurrent = aggregatedSide === 'A' ? currentB : currentA;
+        const dailyGroup = detailCurrent.filter(d =>
+          matchesKeyword(d) && d[side] > 0 && sameDay(d.date, agg.date)
+        );
+
+        if (dailyGroup.length === 0) continue;
+
+        const sumDaily = _.sumBy(dailyGroup, side);
+
+        if (Math.abs(agg[side] - sumDaily) < 0.01) {
+          // Exact daily aggregate match
+          const recordsA = aggregatedSide === 'A' ? [agg._original] : dailyGroup.map(d => d._original);
+          const recordsB = aggregatedSide === 'A' ? dailyGroup.map(d => d._original) : [agg._original];
+          const aSideAmount = aggregatedSide === 'A' ? agg[side] : sumDaily;
+          const bSideAmount = aggregatedSide === 'A' ? sumDaily : agg[side];
+
+          matches.push({
+            id: `match-${matches.length}`,
+            type: 'daily-aggregate',
+            recordsA,
+            recordsB,
+            debitMatchA: side === 'debit' ? aSideAmount : 0,
+            creditMatchA: side === 'credit' ? aSideAmount : 0,
+            totalAmountA: aSideAmount,
+            debitMatchB: side === 'debit' ? bSideAmount : 0,
+            creditMatchB: side === 'credit' ? bSideAmount : 0,
+            totalAmountB: bSideAmount,
+            difference: Math.abs(aSideAmount) - Math.abs(bSideAmount)
+          });
+
+          if (aggregatedSide === 'A') {
+            removeMatched([agg._id], dailyGroup.map(d => d._id));
+          } else {
+            removeMatched(dailyGroup.map(d => d._id), [agg._id]);
+          }
+        } else {
+          // Sum exists but does not equal aggregated amount → report as adjustment
+          const recordA = aggregatedSide === 'A' ? agg._original : { __aggregated: true, items: dailyGroup.map(d => d._original) };
+          const recordB = aggregatedSide === 'A' ? { __aggregated: true, items: dailyGroup.map(d => d._original) } : agg._original;
+          const amountA = aggregatedSide === 'A' ? agg[side] : sumDaily;
+          const amountB = aggregatedSide === 'A' ? sumDaily : agg[side];
+
+          adjustments.push({
+            id: `adj-${adjustments.length}`,
+            identifier: `Daily ${side === 'debit' ? 'Debit' : 'Credit'} Aggregate (${agg.date ? agg.date.toISOString().slice(0,10) : ''})`,
+            recordA,
+            recordB,
+            debitA: side === 'debit' ? amountA : 0,
+            creditA: side === 'credit' ? amountA : 0,
+            amountA,
+            debitB: side === 'debit' ? amountB : 0,
+            creditB: side === 'credit' ? amountB : 0,
+            amountB,
+            difference: amountB - amountA,
+            approved: true
+          });
+
+          if (aggregatedSide === 'A') {
+            removeMatched([agg._id], dailyGroup.map(d => d._id));
+          } else {
+            removeMatched(dailyGroup.map(d => d._id), [agg._id]);
+          }
+        }
+      }
+    }
+  };
+
+  runDailyAggregationMatch();
+
   const runMatchingEngine = (matchType: 'debit' | 'credit') => {
     // 1. Exact Match (Identifier + Amount)
     for (const a of [...currentA]) {
