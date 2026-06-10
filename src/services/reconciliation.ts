@@ -38,14 +38,56 @@ export function parseAmount(val: any): number {
   return 0;
 }
 
-function parseDateStr(val: any): Date | null {
-  if (!val) return null;
-  if (val instanceof Date) return val;
+function parseDateStr(val: any, hint: 'auto' | 'dmy' | 'mdy' | 'ymd' = 'auto'): Date | null {
+  if (val === null || val === undefined || val === '') return null;
+  if (val instanceof Date) return isValid(val) ? val : null;
   if (typeof val === 'number') {
     // Excel date serial number
-    return new Date(Math.round((val - 25569) * 86400 * 1000));
+    const d = new Date(Math.round((val - 25569) * 86400 * 1000));
+    return isValid(d) ? d : null;
   }
-  const d = new Date(val);
+
+  const raw = String(val).trim();
+  if (!raw) return null;
+
+  // ISO-like 2026-05-01 or 2026/05/01
+  const iso = raw.match(/^(\d{4})[\-\/\.](\d{1,2})[\-\/\.](\d{1,2})/);
+  if (iso) {
+    const [, y, m, dd] = iso;
+    const d = new Date(Number(y), Number(m) - 1, Number(dd));
+    return isValid(d) ? d : null;
+  }
+
+  // dd[\/\-\.]mm[\/\-\.]yyyy  OR  mm[\/\-\.]dd[\/\-\.]yyyy
+  const parts = raw.match(/^(\d{1,2})[\-\/\.](\d{1,2})[\-\/\.](\d{2,4})/);
+  if (parts) {
+    let [, p1, p2, p3] = parts;
+    let year = Number(p3);
+    if (year < 100) year += 2000;
+
+    const tryBuild = (day: number, month: number) => {
+      if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+      const d = new Date(year, month - 1, day);
+      return isValid(d) ? d : null;
+    };
+
+    if (hint === 'dmy') return tryBuild(Number(p1), Number(p2));
+    if (hint === 'mdy') return tryBuild(Number(p2), Number(p1));
+    if (hint === 'ymd') {
+      // shouldn't hit here, fallback
+      return tryBuild(Number(p3), Number(p2));
+    }
+
+    // auto: if one side is clearly > 12, use it to disambiguate
+    const n1 = Number(p1), n2 = Number(p2);
+    if (n1 > 12 && n2 <= 12) return tryBuild(n1, n2); // dd/mm
+    if (n2 > 12 && n1 <= 12) return tryBuild(n2, n1); // mm/dd → flipped means n1 is month
+    // default: assume DD/MM/YYYY (most common globally outside US)
+    return tryBuild(n1, n2);
+  }
+
+  // Last resort: native Date (handles ISO timestamps, RFC, etc.)
+  const d = new Date(raw);
   return isValid(d) ? d : null;
 }
 
@@ -84,7 +126,7 @@ export function reconcileData(
       debit,
       credit,
       amount: debit - credit, // Net amount for summary
-      date: parseDateStr(r[mappingsA.date || '']),
+      date: parseDateStr(r[mappingsA.date || ''], settings.dateFormatA || 'auto'),
       ref: String(r[mappingsA.reference || ''] || '').trim().toLowerCase(),
       desc: String(r[mappingsA.description || ''] || '').trim().toLowerCase(),
       resId: String(r[mappingsA.residencyId || ''] || '').trim(),
@@ -100,7 +142,7 @@ export function reconcileData(
       debit,
       credit,
       amount: debit - credit,
-      date: parseDateStr(r[mappingsB.date || '']),
+      date: parseDateStr(r[mappingsB.date || ''], settings.dateFormatB || 'auto'),
       ref: String(r[mappingsB.reference || ''] || '').trim().toLowerCase(),
       desc: String(r[mappingsB.description || ''] || '').trim().toLowerCase(),
       resId: String(r[mappingsB.residencyId || ''] || '').trim(),
@@ -116,107 +158,154 @@ export function reconcileData(
     currentB = currentB.filter(b => !matchedBIds.includes(b._id));
   };
 
-  // ---- Daily Aggregation Step (POS / Bank Commissions) ----
-  // One side (aggregatedSide) records POS/commission as a single daily total,
-  // the other side (detailSide) lists each transaction individually. We sum
-  // detail-side records sharing the same date AND a matching keyword, and try
-  // to match the daily sum against the single aggregated entry.
+  // ---- Daily Aggregation Step (POS / Bank Commissions / Daily Subset-Sum) ----
+  // Powerful daily matching: for each entry on the aggregated side, look at all
+  // unmatched entries on the detail side sharing the same date (within
+  // tolerance) and try to find ANY subset whose amounts sum to the aggregated
+  // entry's amount (within `amountTolerance`). Works even when one day has
+  // multiple aggregated entries (each gets allocated its own subset of details).
+  //
+  // Two modes:
+  //   • Subset-Sum (preferred): no keyword needed. Just dates & amounts.
+  //   • Keyword filter (optional): restrict candidates by keywords in desc/ref.
   const runDailyAggregationMatch = () => {
     if (!settings.enableDailyAggregation) return;
+
+    const tol = (typeof settings.amountTolerance === 'number' && settings.amountTolerance >= 0)
+      ? settings.amountTolerance
+      : 0.01;
 
     const rawKeywords = (settings.aggregationKeywords || '')
       .split(/[,\n;]/)
       .map(k => k.trim().toLowerCase())
       .filter(k => k.length > 0);
 
-    if (rawKeywords.length === 0) return;
-
-    const aggregatedSide = settings.aggregationSide || 'A';
-    const aggregatedPool = aggregatedSide === 'A' ? currentA : currentB;
-    const detailPool = aggregatedSide === 'A' ? currentB : currentA;
+    const useKeywordFilter = !!settings.subsetSumKeywordFilter && rawKeywords.length > 0;
 
     const matchesKeyword = (item: any) => {
+      if (!useKeywordFilter) return true;
       const hay = `${item.desc || ''} ${item.ref || ''}`.toLowerCase();
       return rawKeywords.some(k => hay.includes(k));
     };
 
-    const sameDay = (d1: Date | null, d2: Date | null) => {
-      if (!d1 || !d2) return false;
-      return Math.abs(differenceInDays(d1, d2)) <= settings.dateToleranceDays;
+    const aggregatedSide = settings.aggregationSide || 'A';
+
+    // Subset-sum search: returns indices of items whose amounts sum to target.
+    // Sorted-descending + branch-and-bound; safe up to ~25 items per day.
+    const findSubset = (items: { idx: number; amt: number }[], target: number): number[] | null => {
+      const sorted = [...items].sort((a, b) => b.amt - a.amt);
+      const suffix: number[] = new Array(sorted.length + 1).fill(0);
+      for (let i = sorted.length - 1; i >= 0; i--) suffix[i] = suffix[i + 1] + sorted[i].amt;
+
+      let result: number[] | null = null;
+      const stack: number[] = [];
+
+      const dfs = (pos: number, remaining: number): boolean => {
+        if (Math.abs(remaining) <= tol) {
+          result = stack.map(i => sorted[i].idx);
+          return true;
+        }
+        if (pos >= sorted.length) return false;
+        if (remaining < -tol) return false; // overshoot
+        if (suffix[pos] + tol < remaining) return false; // not enough left
+        // skip too-large item only when it exceeds remaining (with tolerance)
+        if (sorted[pos].amt <= remaining + tol) {
+          stack.push(pos);
+          if (dfs(pos + 1, remaining - sorted[pos].amt)) return true;
+          stack.pop();
+        }
+        return dfs(pos + 1, remaining);
+      };
+
+      dfs(0, target);
+      return result;
     };
 
+    const dayKey = (d: Date | null) => d ? `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}` : '';
+
     for (const side of ['debit', 'credit'] as const) {
-      const aggCandidates = aggregatedPool.filter(item => matchesKeyword(item) && item[side] > 0 && item.date);
+      // Re-pull live pools (entries removed in previous iteration shouldn't appear)
+      const aggPool = (aggregatedSide === 'A' ? currentA : currentB)
+        .filter(x => x[side] > 0 && x.date && matchesKeyword(x));
+      // group aggregated entries by day, smallest first so that a 1:1 match
+      // is consumed by a small entry before a big entry sweeps it into a subset
+      const aggByDay = _.groupBy(aggPool, x => dayKey(x.date));
 
-      for (const agg of aggCandidates) {
-        // re-check it's still in the pool (may have been removed by previous side)
-        const stillThere = aggregatedSide === 'A'
-          ? currentA.some(x => x._id === agg._id)
-          : currentB.some(x => x._id === agg._id);
-        if (!stillThere) continue;
-
-        const detailCurrent = aggregatedSide === 'A' ? currentB : currentA;
-        const dailyGroup = detailCurrent.filter(d =>
-          matchesKeyword(d) && d[side] > 0 && sameDay(d.date, agg.date)
+      const days = Object.keys(aggByDay);
+      for (const day of days) {
+        const aggEntries = aggByDay[day].sort((a, b) => a[side] - b[side]);
+        // candidate detail pool: same day (with date tolerance) on the other side
+        const detailLive = aggregatedSide === 'A' ? currentB : currentA;
+        let detailPool = detailLive.filter(d =>
+          d[side] > 0 && d.date && matchesKeyword(d) &&
+          Math.abs(differenceInDays(d.date!, aggEntries[0].date!)) <= settings.dateToleranceDays
         );
 
-        if (dailyGroup.length === 0) continue;
+        for (const agg of aggEntries) {
+          // verify still in pool
+          const stillThere = aggregatedSide === 'A'
+            ? currentA.some(x => x._id === agg._id)
+            : currentB.some(x => x._id === agg._id);
+          if (!stillThere) continue;
 
-        const sumDaily = _.sumBy(dailyGroup, side);
+          if (detailPool.length === 0) continue;
 
-        if (Math.abs(agg[side] - sumDaily) < 0.01) {
-          // Exact daily aggregate match
-          const recordsA = aggregatedSide === 'A' ? [agg._original] : dailyGroup.map(d => d._original);
-          const recordsB = aggregatedSide === 'A' ? dailyGroup.map(d => d._original) : [agg._original];
-          const aSideAmount = aggregatedSide === 'A' ? agg[side] : sumDaily;
-          const bSideAmount = aggregatedSide === 'A' ? sumDaily : agg[side];
-
-          matches.push({
-            id: `match-${matches.length}`,
-            type: 'daily-aggregate',
-            recordsA,
-            recordsB,
-            debitMatchA: side === 'debit' ? aSideAmount : 0,
-            creditMatchA: side === 'credit' ? aSideAmount : 0,
-            totalAmountA: aSideAmount,
-            debitMatchB: side === 'debit' ? bSideAmount : 0,
-            creditMatchB: side === 'credit' ? bSideAmount : 0,
-            totalAmountB: bSideAmount,
-            difference: Math.abs(aSideAmount) - Math.abs(bSideAmount)
-          });
-
-          if (aggregatedSide === 'A') {
-            removeMatched([agg._id], dailyGroup.map(d => d._id));
+          // Try subset-sum: prefer a single-row match first, then a subset.
+          let chosenIds: string[] | null = null;
+          if (settings.enableSubsetSum !== false) {
+            // 1) Single-row exact match (prefer 1:1 over n:1)
+            const singleIdx = detailPool.findIndex(d => Math.abs(d[side] - agg[side]) <= tol);
+            if (singleIdx !== -1) {
+              chosenIds = [detailPool[singleIdx]._id];
+            } else {
+              // 2) Subset-sum (any combination summing to agg)
+              const items = detailPool.map((d, i) => ({ idx: i, amt: d[side] }));
+              const subsetIdx = findSubset(items, agg[side]);
+              if (subsetIdx && subsetIdx.length > 0) {
+                chosenIds = subsetIdx.map(i => detailPool[i]._id);
+              }
+            }
           } else {
-            removeMatched(dailyGroup.map(d => d._id), [agg._id]);
+            // Legacy: sum all detail entries on the day
+            const sum = _.sumBy(detailPool, side);
+            if (Math.abs(sum - agg[side]) <= tol) {
+              chosenIds = detailPool.map(d => d._id);
+            }
           }
-        } else {
-          // Sum exists but does not equal aggregated amount → report as adjustment
-          const recordA = aggregatedSide === 'A' ? agg._original : { __aggregated: true, items: dailyGroup.map(d => d._original) };
-          const recordB = aggregatedSide === 'A' ? { __aggregated: true, items: dailyGroup.map(d => d._original) } : agg._original;
-          const amountA = aggregatedSide === 'A' ? agg[side] : sumDaily;
-          const amountB = aggregatedSide === 'A' ? sumDaily : agg[side];
 
-          adjustments.push({
-            id: `adj-${adjustments.length}`,
-            identifier: `Daily ${side === 'debit' ? 'Debit' : 'Credit'} Aggregate (${agg.date ? agg.date.toISOString().slice(0,10) : ''})`,
-            recordA,
-            recordB,
-            debitA: side === 'debit' ? amountA : 0,
-            creditA: side === 'credit' ? amountA : 0,
-            amountA,
-            debitB: side === 'debit' ? amountB : 0,
-            creditB: side === 'credit' ? amountB : 0,
-            amountB,
-            difference: amountB - amountA,
-            approved: true
-          });
+          if (chosenIds && chosenIds.length > 0) {
+            const chosenSet = new Set(chosenIds);
+            const chosenItems = detailPool.filter(d => chosenSet.has(d._id));
+            const sumChosen = _.sumBy(chosenItems, side);
 
-          if (aggregatedSide === 'A') {
-            removeMatched([agg._id], dailyGroup.map(d => d._id));
-          } else {
-            removeMatched(dailyGroup.map(d => d._id), [agg._id]);
+            const recordsA = aggregatedSide === 'A' ? [agg._original] : chosenItems.map(d => d._original);
+            const recordsB = aggregatedSide === 'A' ? chosenItems.map(d => d._original) : [agg._original];
+            const aSideAmount = aggregatedSide === 'A' ? agg[side] : sumChosen;
+            const bSideAmount = aggregatedSide === 'A' ? sumChosen : agg[side];
+
+            matches.push({
+              id: `match-${matches.length}`,
+              type: 'daily-aggregate',
+              recordsA,
+              recordsB,
+              debitMatchA: side === 'debit' ? aSideAmount : 0,
+              creditMatchA: side === 'credit' ? aSideAmount : 0,
+              totalAmountA: aSideAmount,
+              debitMatchB: side === 'debit' ? bSideAmount : 0,
+              creditMatchB: side === 'credit' ? bSideAmount : 0,
+              totalAmountB: bSideAmount,
+              difference: Math.abs(aSideAmount) - Math.abs(bSideAmount)
+            });
+
+            if (aggregatedSide === 'A') {
+              removeMatched([agg._id], chosenIds);
+            } else {
+              removeMatched(chosenIds, [agg._id]);
+            }
+            // shrink candidate pool for the next agg entry on this day
+            detailPool = detailPool.filter(d => !chosenSet.has(d._id));
           }
+          // if no subset found → leave both for later steps (or unmatched at the end)
         }
       }
     }

@@ -23,8 +23,18 @@ export interface ReconcileSettings {
   // Daily aggregation: one side records POS/commission entries as a single
   // daily total while the other side lists them individually.
   enableDailyAggregation: boolean;
-  aggregationKeywords: string; // comma-separated, e.g. "POS, نقاط بيع, عمولة"
+  aggregationKeywords: string; // optional comma-separated filter
   aggregationSide: 'A' | 'B'; // which dataset contains the aggregated (single) entries
+  // Powerful subset-sum matching: for each aggregated entry on a given date,
+  // find any subset of detail-side entries on the same date whose amounts sum
+  // to that entry. Works without keywords by default.
+  enableSubsetSum: boolean;
+  subsetSumKeywordFilter: boolean; // if true, only consider rows whose desc/ref contains a keyword
+  amountTolerance: number; // default 0.01
+  // Date format hints (auto, dmy, mdy, ymd). Needed because "01/05/2026"
+  // is ambiguous between Jan-5 and May-1 depending on locale.
+  dateFormatA: 'auto' | 'dmy' | 'mdy' | 'ymd';
+  dateFormatB: 'auto' | 'dmy' | 'mdy' | 'ymd';
 }
 
 export interface MatchResult {

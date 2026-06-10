@@ -39,6 +39,11 @@ export function MappingPage({ datasets, onBack, onNext }: MappingPageProps) {
     enableDailyAggregation: false,
     aggregationKeywords: 'POS, نقاط بيع, نقطة بيع, عمولة, عمولات, مصاريف بنكية, رسوم, commission, fees',
     aggregationSide: 'A',
+    enableSubsetSum: true,
+    subsetSumKeywordFilter: false,
+    amountTolerance: 0.01,
+    dateFormatA: 'auto',
+    dateFormatB: 'auto',
   });
 
   // Auto-detect columns based on common names
@@ -244,39 +249,128 @@ export function MappingPage({ datasets, onBack, onNext }: MappingPageProps) {
           </div>
 
           {settings.enableDailyAggregation && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">
-                  Aggregated side (records the single daily total)
-                </label>
-                <select
-                  data-testid="aggregation-side-select"
-                  value={settings.aggregationSide}
-                  onChange={(e) => setSettings(prev => ({ ...prev, aggregationSide: e.target.value as 'A' | 'B' }))}
-                  className="w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                >
-                  <option value="A">Dataset A (e.g., Ledger)</option>
-                  <option value="B">Dataset B (e.g., Bank Statement)</option>
-                </select>
-                <p className="text-xs text-slate-500 mt-1">
-                  The other side is assumed to list every transaction separately.
-                </p>
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    Aggregated side (records the single daily total / one entry per group)
+                  </label>
+                  <select
+                    data-testid="aggregation-side-select"
+                    value={settings.aggregationSide}
+                    onChange={(e) => setSettings(prev => ({ ...prev, aggregationSide: e.target.value as 'A' | 'B' }))}
+                    className="w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="A">Dataset A (e.g., System / Ledger)</option>
+                    <option value="B">Dataset B (e.g., Bank Statement)</option>
+                  </select>
+                  <p className="text-xs text-slate-500 mt-1">
+                    The other side is assumed to list every transaction separately.
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    Amount tolerance
+                  </label>
+                  <input
+                    data-testid="amount-tolerance-input"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={settings.amountTolerance}
+                    onChange={(e) => setSettings(prev => ({ ...prev, amountTolerance: parseFloat(e.target.value) || 0 }))}
+                    className="w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <p className="text-xs text-slate-500 mt-1">
+                    Allowed rounding error when comparing sums (default 0.01).
+                  </p>
+                </div>
               </div>
+
+              <div className="p-4 bg-indigo-50 rounded-lg border border-indigo-100">
+                <label className="flex items-start space-x-3 cursor-pointer">
+                  <input
+                    data-testid="enable-subset-sum-checkbox"
+                    type="checkbox"
+                    checked={settings.enableSubsetSum}
+                    onChange={(e) => setSettings(prev => ({ ...prev, enableSubsetSum: e.target.checked }))}
+                    className="w-5 h-5 mt-0.5 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
+                  />
+                  <div>
+                    <span className="text-sm font-semibold text-slate-800">Smart subset-sum matching (recommended)</span>
+                    <p className="text-xs text-slate-600 mt-1">
+                      For each entry on the aggregated side, automatically picks any subset of
+                      detail-side rows on the same date whose amounts sum to it. Works without
+                      keywords and handles multiple aggregated entries per day.
+                    </p>
+                  </div>
+                </label>
+              </div>
+
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">
-                  Aggregation keywords (comma-separated)
+                <label className="flex items-start space-x-3 cursor-pointer mb-3">
+                  <input
+                    data-testid="use-keyword-filter-checkbox"
+                    type="checkbox"
+                    checked={settings.subsetSumKeywordFilter}
+                    onChange={(e) => setSettings(prev => ({ ...prev, subsetSumKeywordFilter: e.target.checked }))}
+                    className="w-5 h-5 mt-0.5 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
+                  />
+                  <div>
+                    <span className="text-sm font-medium text-slate-700">Restrict to rows containing keywords</span>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Optional: only consider rows whose description / reference contains one of the
+                      keywords below. Leave off to let the algorithm work on all daily entries.
+                    </p>
+                  </div>
                 </label>
                 <textarea
                   data-testid="aggregation-keywords-input"
                   rows={2}
                   value={settings.aggregationKeywords}
                   onChange={(e) => setSettings(prev => ({ ...prev, aggregationKeywords: e.target.value }))}
-                  className="w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 text-sm"
+                  disabled={!settings.subsetSumKeywordFilter}
+                  className="w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 text-sm disabled:bg-slate-100 disabled:text-slate-400"
                   placeholder="POS, نقاط بيع, عمولة, commission, fees"
                 />
-                <p className="text-xs text-slate-500 mt-1">
-                  Records matching any keyword (in description or reference) on both sides will be grouped daily.
-                </p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    Date format — Dataset A
+                  </label>
+                  <select
+                    data-testid="date-format-a-select"
+                    value={settings.dateFormatA}
+                    onChange={(e) => setSettings(prev => ({ ...prev, dateFormatA: e.target.value as any }))}
+                    className="w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="auto">Auto-detect</option>
+                    <option value="dmy">DD/MM/YYYY (day-month-year)</option>
+                    <option value="mdy">MM/DD/YYYY (month-day-year)</option>
+                    <option value="ymd">YYYY-MM-DD (ISO)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    Date format — Dataset B
+                  </label>
+                  <select
+                    data-testid="date-format-b-select"
+                    value={settings.dateFormatB}
+                    onChange={(e) => setSettings(prev => ({ ...prev, dateFormatB: e.target.value as any }))}
+                    className="w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="auto">Auto-detect</option>
+                    <option value="dmy">DD/MM/YYYY (day-month-year)</option>
+                    <option value="mdy">MM/DD/YYYY (month-day-year)</option>
+                    <option value="ymd">YYYY-MM-DD (ISO)</option>
+                  </select>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Set this when the file uses ambiguous date formats like "01/05/2026".
+                  </p>
+                </div>
               </div>
             </div>
           )}
