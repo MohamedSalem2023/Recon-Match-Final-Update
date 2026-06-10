@@ -36,7 +36,7 @@ export function MappingPage({ datasets, onBack, onNext }: MappingPageProps) {
     dateToleranceDays: 0,
     fuzzyThreshold: 0.3,
     matchOneToMany: true,
-    enableDailyAggregation: false,
+    enableDailyAggregation: true,
     aggregationKeywords: 'POS, نقاط بيع, نقطة بيع, عمولة, عمولات, مصاريف بنكية, رسوم, commission, fees',
     aggregationSide: 'A',
     enableSubsetSum: true,
@@ -231,9 +231,10 @@ export function MappingPage({ datasets, onBack, onNext }: MappingPageProps) {
             <div>
               <h4 className="text-lg font-semibold text-slate-800">Daily Aggregation (POS / Bank Commissions)</h4>
               <p className="text-sm text-slate-500 mt-1">
-                When one side records POS or bank commission transactions as one daily total but the
-                other side lists each transaction individually, enable this to sum the detail side
-                per day and match it against the single aggregated entry.
+                <strong>Enabled by default.</strong> Automatically detects when one side records POS or
+                bank commission transactions as one daily total while the other side lists each
+                transaction individually. The algorithm tries BOTH directions (A→B and B→A) so you
+                don't need to pre-select which file is aggregated.
               </p>
             </div>
             <label className="flex items-center space-x-3 cursor-pointer shrink-0 ml-4">
@@ -244,30 +245,13 @@ export function MappingPage({ datasets, onBack, onNext }: MappingPageProps) {
                 onChange={(e) => setSettings(prev => ({ ...prev, enableDailyAggregation: e.target.checked }))}
                 className="w-5 h-5 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
               />
-              <span className="text-sm font-medium text-slate-700">Enable</span>
+              <span className="text-sm font-medium text-slate-700">Enabled</span>
             </label>
           </div>
 
           {settings.enableDailyAggregation && (
             <div className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">
-                    Aggregated side (records the single daily total / one entry per group)
-                  </label>
-                  <select
-                    data-testid="aggregation-side-select"
-                    value={settings.aggregationSide}
-                    onChange={(e) => setSettings(prev => ({ ...prev, aggregationSide: e.target.value as 'A' | 'B' }))}
-                    className="w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                  >
-                    <option value="A">Dataset A (e.g., System / Ledger)</option>
-                    <option value="B">Dataset B (e.g., Bank Statement)</option>
-                  </select>
-                  <p className="text-xs text-slate-500 mt-1">
-                    The other side is assumed to list every transaction separately.
-                  </p>
-                </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">
                     Amount tolerance
@@ -284,6 +268,11 @@ export function MappingPage({ datasets, onBack, onNext }: MappingPageProps) {
                   <p className="text-xs text-slate-500 mt-1">
                     Allowed rounding error when comparing sums (default 0.01).
                   </p>
+                </div>
+                <div className="p-3 bg-emerald-50 rounded-lg border border-emerald-200 text-xs text-emerald-900">
+                  <strong>Bilateral matching</strong> is automatic. The algorithm tries to find
+                  subsets in BOTH directions (A→B and B→A) and prefers single-row matches first.
+                  No need to pick a side.
                 </div>
               </div>
 
