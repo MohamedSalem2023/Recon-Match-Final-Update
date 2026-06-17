@@ -1,0 +1,5 @@
+{
+  "name": "ReconMatch",
+  "description": "Financial Reconciliation System for matching transactions from multiple Excel files.",
+  "requestFramePermissions": []
+}
